@@ -12,6 +12,7 @@ bool g_bIsCreatingTeam[MAXPLAYERS+1];
 // Team
 ArrayList g_aTeamMember[MAXPLAYERS+1];
 int g_iLeaderIndex[MAXPLAYERS+1];
+int g_iNextPlayerIndex[MAXPLAYERS+1];
 
 public void OnPluginStart()
 {
@@ -78,11 +79,12 @@ public Action Command_Exit(int client, int args)
         return Plugin_Handled;
     }
 
-    ResetStatus(client, true);
+    ExitTeam(client);
 
     return Plugin_Handled;
 }
 
+// Invite functions
 // A few things we need to be careful with:
 // 1. Dont add the client + invited + invitation sent players + bots to menu item
 // 2. If invited target gets the invitation but doesn't do anything to it then it should be invalid after 30sec
@@ -245,6 +247,12 @@ public Action Timer_InvitationHandler(Handle timer, DataPack dp)
 // Team functions
 void JoinTeam(int leader, int member)
 {
+    if (g_bIsInTeam[member])
+    {
+        PrintToChat(member, "[!] Failed to join team. You are already in a team.");
+        return;
+    }
+
     if (!g_aTeamMember[leader])
     {
         g_aTeamMember[leader] = new ArrayList();
@@ -271,15 +279,15 @@ void JoinTeam(int leader, int member)
 
     g_bIsInTeam[member] = true;
 
-#if 0
-    PrintToServer("------");
+    #if 0
+        PrintToServer("------");
 
-    for (int i = 0; i < g_aTeamMember[leader].Length; i++)
-    {
-        int t = g_aTeamMember[leader].Get(i);
-        PrintToServer("%N - %d", t, t);
-    }
-#endif
+        for (int i = 0; i < g_aTeamMember[leader].Length; i++)
+        {
+            int t = g_aTeamMember[leader].Get(i);
+            PrintToServer("%N - %d", t, t);
+        }
+    #endif
 }
 
 bool CreateTeam(int leader)
@@ -298,30 +306,37 @@ bool CreateTeam(int leader)
     g_aTeamMember[leader].Clear();
     PrintToServer("Length: %d", temp.Length);
     g_aTeamMember[leader].Push(leader);
+    g_iNextPlayerIndex[leader] = temp.Get(0);
 
-    for (int i = 0; i < temp.Length; i++)
+    for (int i = 1; i < temp.Length; i++)
     {
-        int member = temp.Get(i);
+        int member = temp.Get(i - 1);
 
         if (!IsValidClient(member))
             continue;
 
         g_aTeamMember[leader].Push(member);
         g_iLeaderIndex[member] = leader;
+        
+        int next_player = temp.Get(i);
+        g_iNextPlayerIndex[member] = next_player;
+        if (i == temp.Length - 1)
+            g_iNextPlayerIndex[member] = leader;
+
         PrintToServer("Member: %N - %d. Leader: %N - %d", member, member, leader, leader);
     }
 
     delete temp;
 
-#if 1
-    PrintToServer("------");
+    #if 1
+        PrintToServer("------");
 
-    for (int i = 0; i < g_aTeamMember[leader].Length; i++)
-    {
-        int member = g_aTeamMember[leader].Get(i);
-        PrintToServer("%N - %d", member, member);
-    }
-#endif 
+        for (int i = 0; i < g_aTeamMember[leader].Length; i++)
+        {
+            int member = g_aTeamMember[leader].Get(i);
+            PrintToServer("%N - %d", member, member);
+        }
+    #endif 
 
     return true;
 }
@@ -351,13 +366,15 @@ void BreakupTeam(int leader)
     delete g_aTeamMember[leader];
 }
 
-void ResetStatus(int client, bool delete_arry = false)
+void ExitTeam(int client)
 {
     g_bIsInTeam[client] = false;
     g_bIsCreatingTeam[client] = false;
     int leader = g_iLeaderIndex[client];
 
-    PrintToChat(client, "Leader: %N - %d, Client: %N - %d", leader, leader, client, client);
+    #if 0
+        PrintToChat(client, "Leader: %N - %d, Client: %N - %d", leader, leader, client, client);
+    #endif
 
     g_iLeaderIndex[client] = 0;
 
@@ -370,10 +387,63 @@ void ResetStatus(int client, bool delete_arry = false)
         {
             g_aTeamMember[leader].Erase(index);
         }
+
+        // If leader is the only member left, disband the team
+        if (g_aTeamMember[leader].Length == 1)
+        {
+            // Reuse it haha
+            BreakupTeam(leader);
+        }
     }
 
-    if (delete_arry)
-    {
-        delete g_aTeamMember[client];
-    }
+    PrintToChat(client, "[+] You have left %N's team", leader);
 }
+
+
+// Checkpoint functions
+public Action Shavit_OnCheckPointMenuMade(int client, bool segment, Menu menu)
+{
+    int style = Shavit_GetBhopStyle(client);
+    if (!Shavit_GetStyleSettingBool(style, "tagteam"))
+    {
+        return Plugin_Continue;
+    }
+
+    if (!g_bIsInTeam[client])
+    {
+        PrintToChat(client, "[!] Failed to open checkpoint menu. You are not in a team");
+
+        return Plugin_Handled;
+    }
+
+    char display[64];
+    FormatEx(display, sizeof(display), "Pass to next team member");
+    menu.AddItem("pass", display);
+
+    // if client is leader
+    if (client == g_iLeaderIndex[client])
+    {
+        FormatEx(display, sizeof(display), "Breakup team");
+        menu.AddItem("breakup", display);
+    }
+
+    return Plugin_Changed;
+}
+
+public Action Shavit_OnCheckpointMenuSelect(int client, int param2, char[] info, int maxlength, int currentCheckpoint, int maxCPs)
+{
+    if (StrEqual(info, "pass"))
+    {
+        // PassToNext(client);
+        return Plugin_Stop;
+    }
+
+    if (StrEqual(info, "breakup"))
+    {
+        BreakupTeam(client);
+        return Plugin_Stop;
+    }
+
+    return Plugin_Continue;
+}
+
